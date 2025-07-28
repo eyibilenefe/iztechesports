@@ -62,6 +62,19 @@ CREATE TABLE public.lobbies (
   CONSTRAINT lobbies_game_id_fkey FOREIGN KEY (game_id) REFERENCES public.games(id),
   CONSTRAINT lobbies_tournament_id_fkey FOREIGN KEY (tournament_id) REFERENCES public.tournaments(id)
 );
+CREATE TABLE public.lobby_invitations (
+  id bigint NOT NULL DEFAULT nextval('lobby_invitations_id_seq'::regclass),
+  lobby_id bigint NOT NULL,
+  invited_user_id uuid NOT NULL,
+  inviter_user_id uuid NOT NULL,
+  status text NOT NULL DEFAULT 'pending'::text,
+  invited_at timestamp with time zone NOT NULL DEFAULT now(),
+  responded_at timestamp with time zone,
+  CONSTRAINT lobby_invitations_pkey PRIMARY KEY (id),
+  CONSTRAINT lobby_invitations_lobby_id_fkey FOREIGN KEY (lobby_id) REFERENCES public.lobbies(id),
+  CONSTRAINT lobby_invitations_invited_user_id_fkey FOREIGN KEY (invited_user_id) REFERENCES public.profiles(id),
+  CONSTRAINT lobby_invitations_inviter_user_id_fkey FOREIGN KEY (inviter_user_id) REFERENCES public.profiles(id)
+);
 CREATE TABLE public.lobby_join_requests (
   id bigint NOT NULL DEFAULT nextval('lobby_join_requests_id_seq'::regclass),
   lobby_id bigint NOT NULL,
@@ -215,6 +228,19 @@ CREATE TABLE public.tournament_details (
   CONSTRAINT tournament_details_pkey PRIMARY KEY (tournament_id),
   CONSTRAINT tournament_details_tournament_id_fkey FOREIGN KEY (tournament_id) REFERENCES public.tournaments(id)
 );
+CREATE TABLE public.tournament_invitations (
+  id bigint NOT NULL DEFAULT nextval('tournament_invitations_id_seq'::regclass),
+  tournament_id bigint NOT NULL,
+  invited_user_id uuid NOT NULL,
+  inviter_user_id uuid NOT NULL,
+  status text NOT NULL DEFAULT 'pending'::text,
+  invited_at timestamp with time zone NOT NULL DEFAULT now(),
+  responded_at timestamp with time zone,
+  CONSTRAINT tournament_invitations_pkey PRIMARY KEY (id),
+  CONSTRAINT tournament_invitations_tournament_id_fkey FOREIGN KEY (tournament_id) REFERENCES public.tournaments(id),
+  CONSTRAINT tournament_invitations_invited_user_id_fkey FOREIGN KEY (invited_user_id) REFERENCES public.profiles(id),
+  CONSTRAINT tournament_invitations_inviter_user_id_fkey FOREIGN KEY (inviter_user_id) REFERENCES public.profiles(id)
+);
 CREATE TABLE public.tournament_matches (
   id bigint NOT NULL DEFAULT nextval('tournament_matches_id_seq'::regclass),
   tournament_id bigint NOT NULL,
@@ -266,6 +292,8 @@ CREATE TABLE public.user_game_profiles (
   game_id bigint NOT NULL,
   nickname character varying NOT NULL,
   rank text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone,
   CONSTRAINT user_game_profiles_pkey PRIMARY KEY (id),
   CONSTRAINT user_game_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id),
   CONSTRAINT user_game_profiles_game_id_fkey FOREIGN KEY (game_id) REFERENCES public.games(id)
@@ -284,3 +312,247 @@ CREATE TABLE public.user_game_stats (
   CONSTRAINT user_game_stats_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id),
   CONSTRAINT user_game_stats_game_id_fkey FOREIGN KEY (game_id) REFERENCES public.games(id)
 );
+
+-- =================================================================
+-- USER_GAME_PROFILES Tablosu Güncellemeleri
+-- =================================================================
+
+-- Eğer created_at ve updated_at sütunları yoksa ekle
+ALTER TABLE public.user_game_profiles 
+ADD COLUMN IF NOT EXISTS created_at timestamp with time zone NOT NULL DEFAULT now();
+
+ALTER TABLE public.user_game_profiles 
+ADD COLUMN IF NOT EXISTS updated_at timestamp with time zone;
+
+-- Mevcut kayıtlar için created_at değerini güncelle (eğer NULL ise)
+UPDATE public.user_game_profiles 
+SET created_at = now() 
+WHERE created_at IS NULL;
+
+-- updated_at trigger fonksiyonu oluştur
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- updated_at trigger'ını oluştur (eğer yoksa)
+DROP TRIGGER IF EXISTS update_user_game_profiles_updated_at ON public.user_game_profiles;
+CREATE TRIGGER update_user_game_profiles_updated_at
+    BEFORE UPDATE ON public.user_game_profiles
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- =================================================================
+-- LOBBY BAZLI DAVET SİSTEMİ İÇİN GEREKLİ TABLOLAR
+-- =================================================================
+
+-- Sequence oluştur (eğer yoksa) - ÖNCE SEQUENCE OLUŞTUR
+CREATE SEQUENCE IF NOT EXISTS public.lobby_invitations_id_seq
+    AS bigint
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+-- LOBBY_INVITATIONS tablosu (eğer yoksa oluştur)
+CREATE TABLE IF NOT EXISTS public.lobby_invitations (
+    id bigint NOT NULL DEFAULT nextval('lobby_invitations_id_seq'::regclass),
+    lobby_id bigint NOT NULL,
+    invited_user_id uuid NOT NULL,
+    inviter_user_id uuid NOT NULL,
+    status text NOT NULL DEFAULT 'pending'::text CHECK (status IN ('pending', 'accepted', 'rejected')),
+    invited_at timestamp with time zone NOT NULL DEFAULT now(),
+    responded_at timestamp with time zone,
+    CONSTRAINT lobby_invitations_pkey PRIMARY KEY (id),
+    CONSTRAINT lobby_invitations_lobby_id_fkey FOREIGN KEY (lobby_id) REFERENCES public.lobbies(id) ON DELETE CASCADE,
+    CONSTRAINT lobby_invitations_invited_user_id_fkey FOREIGN KEY (invited_user_id) REFERENCES public.profiles(id) ON DELETE CASCADE,
+    CONSTRAINT lobby_invitations_inviter_user_id_fkey FOREIGN KEY (inviter_user_id) REFERENCES public.profiles(id) ON DELETE CASCADE,
+    CONSTRAINT lobby_invitations_unique UNIQUE (lobby_id, invited_user_id)
+);
+
+-- Sequence'i tabloya bağla
+ALTER SEQUENCE public.lobby_invitations_id_seq OWNED BY public.lobby_invitations.id;
+
+-- =================================================================
+-- LOBBY BAZLI DAVET SİSTEMİ İÇİN RLS POLİTİKALARI
+-- =================================================================
+
+-- LOBBY_INVITATIONS için RLS'yi etkinleştir
+ALTER TABLE public.lobby_invitations ENABLE ROW LEVEL SECURITY;
+
+-- Mevcut politikaları temizle (eğer varsa)
+DROP POLICY IF EXISTS "Kullanıcılar kendi davetlerini görebilir." ON public.lobby_invitations;
+DROP POLICY IF EXISTS "Giriş yapmış kullanıcılar davet gönderebilir." ON public.lobby_invitations;
+DROP POLICY IF EXISTS "Davet edilen kullanıcı daveti yanıtlayabilir." ON public.lobby_invitations;
+DROP POLICY IF EXISTS "Davet edilen kullanıcı daveti silebilir." ON public.lobby_invitations;
+
+-- Yeni politikaları oluştur
+CREATE POLICY "Kullanıcılar kendi davetlerini görebilir."
+ON public.lobby_invitations FOR SELECT
+USING (auth.uid() = invited_user_id OR auth.uid() = inviter_user_id);
+
+CREATE POLICY "Giriş yapmış kullanıcılar davet gönderebilir."
+ON public.lobby_invitations FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = inviter_user_id);
+
+CREATE POLICY "Davet edilen kullanıcı daveti yanıtlayabilir."
+ON public.lobby_invitations FOR UPDATE
+USING (auth.uid() = invited_user_id)
+WITH CHECK (auth.uid() = invited_user_id);
+
+CREATE POLICY "Davet edilen kullanıcı daveti silebilir."
+ON public.lobby_invitations FOR DELETE
+USING (auth.uid() = invited_user_id);
+
+-- =================================================================
+-- LOBBY BAZLI DAVET SİSTEMİ İÇİN YARDIMCI FONKSİYONLAR
+-- =================================================================
+
+-- Lobi daveti gönderme fonksiyonu
+CREATE OR REPLACE FUNCTION send_lobby_invitation(
+    p_lobby_id bigint,
+    p_invited_user_id uuid,
+    p_inviter_user_id uuid
+)
+RETURNS json AS $$
+DECLARE
+    v_invitation_id bigint;
+    v_lobby_name text;
+    v_inviter_name text;
+BEGIN
+    -- Lobi bilgilerini al
+    SELECT name INTO v_lobby_name 
+    FROM public.lobbies 
+    WHERE id = p_lobby_id;
+    
+    -- Davet eden kullanıcı bilgilerini al
+    SELECT username INTO v_inviter_name 
+    FROM public.profiles 
+    WHERE id = p_inviter_user_id;
+    
+    -- Davet oluştur
+    INSERT INTO public.lobby_invitations (lobby_id, invited_user_id, inviter_user_id)
+    VALUES (p_lobby_id, p_invited_user_id, p_inviter_user_id)
+    RETURNING id INTO v_invitation_id;
+    
+    -- Bildirim oluştur
+    INSERT INTO public.notifications (user_id, content, link)
+    VALUES (
+        p_invited_user_id,
+        v_inviter_name || ' sizi "' || v_lobby_name || '" lobisine davet etti.',
+        '/lobby-invitations/' || v_invitation_id
+    );
+    
+    RETURN json_build_object(
+        'success', true,
+        'invitation_id', v_invitation_id,
+        'message', 'Davet başarıyla gönderildi'
+    );
+    
+EXCEPTION WHEN OTHERS THEN
+    RETURN json_build_object(
+        'success', false,
+        'error', SQLERRM
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Lobi davetini yanıtlama fonksiyonu
+CREATE OR REPLACE FUNCTION respond_to_lobby_invitation(
+    p_invitation_id bigint,
+    p_status text,
+    p_user_id uuid
+)
+RETURNS json AS $$
+DECLARE
+    v_lobby_id bigint;
+    v_inviter_id uuid;
+    v_lobby_name text;
+    v_invited_name text;
+BEGIN
+    -- Davet bilgilerini kontrol et ve güncelle
+    UPDATE public.lobby_invitations 
+    SET status = p_status, responded_at = now()
+    WHERE id = p_invitation_id AND invited_user_id = p_user_id
+    RETURNING lobby_id, inviter_user_id INTO v_lobby_id, v_inviter_id;
+    
+    IF NOT FOUND THEN
+        RETURN json_build_object(
+            'success', false,
+            'error', 'Davet bulunamadı veya yetkiniz yok'
+        );
+    END IF;
+    
+    -- Lobi ve kullanıcı bilgilerini al
+    SELECT name INTO v_lobby_name FROM public.lobbies WHERE id = v_lobby_id;
+    SELECT username INTO v_invited_name FROM public.profiles WHERE id = p_user_id;
+    
+    -- Eğer davet kabul edildiyse lobiye katıl
+    IF p_status = 'accepted' THEN
+        INSERT INTO public.lobby_participants (lobby_id, user_id)
+        VALUES (v_lobby_id, p_user_id)
+        ON CONFLICT (lobby_id, user_id) DO NOTHING;
+        
+        -- Davet eden kullanıcıya bildirim gönder
+        INSERT INTO public.notifications (user_id, content, link)
+        VALUES (
+            v_inviter_id,
+            v_invited_name || ' lobi davetinizi kabul etti.',
+            '/lobbies/' || v_lobby_id
+        );
+    ELSE
+        -- Davet eden kullanıcıya red bildirimi gönder
+        INSERT INTO public.notifications (user_id, content, link)
+        VALUES (
+            v_inviter_id,
+            v_invited_name || ' lobi davetinizi reddetti.',
+            '/lobbies/' || v_lobby_id
+        );
+    END IF;
+    
+    RETURN json_build_object(
+        'success', true,
+        'message', 'Davet yanıtlandı'
+    );
+    
+EXCEPTION WHEN OTHERS THEN
+    RETURN json_build_object(
+        'success', false,
+        'error', SQLERRM
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- =================================================================
+-- LOBBY_PARTICIPANTS TABLOSU İÇİN UNIQUE CONSTRAINT
+-- =================================================================
+
+-- Aynı kullanıcının aynı lobiye birden fazla kez katılmasını engelle
+-- Önce constraint'i kontrol et ve varsa sil
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'lobby_participants_unique' 
+        AND table_name = 'lobby_participants'
+    ) THEN
+        ALTER TABLE public.lobby_participants DROP CONSTRAINT lobby_participants_unique;
+    END IF;
+END $$;
+
+-- Yeni constraint'i ekle
+ALTER TABLE public.lobby_participants 
+ADD CONSTRAINT lobby_participants_unique 
+UNIQUE (lobby_id, user_id);
+
+-- =================================================================
+-- VERİTABANI ŞEMASINI GÜNCELLE
+-- =================================================================
+
+-- Schema cache'ini temizle (Supabase otomatik olarak yapacak)
+-- Bu sorgu schema cache'inin yenilenmesini sağlar
+SELECT pg_notify('schema_update', 'user_game_profiles_updated');

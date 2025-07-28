@@ -101,6 +101,33 @@ CREATE POLICY "Kullanıcılar kendi katılımlarını silebilir."
 ON public.lobby_participants FOR DELETE
 USING (auth.uid() = user_id);
 
+CREATE POLICY "Sistem lobi katılımcısı ekleyebilir."
+ON public.lobby_participants FOR INSERT
+WITH CHECK (auth.role() = 'authenticated');
+
+
+---
+-- LOBBY_INVITATIONS Tablosu Politikaları
+---
+ALTER TABLE public.lobby_invitations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Kullanıcılar kendi davetlerini görebilir."
+ON public.lobby_invitations FOR SELECT
+USING (auth.uid() = invited_user_id OR auth.uid() = inviter_user_id);
+
+CREATE POLICY "Giriş yapmış kullanıcılar davet gönderebilir."
+ON public.lobby_invitations FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = inviter_user_id);
+
+CREATE POLICY "Davet edilen kullanıcı daveti yanıtlayabilir."
+ON public.lobby_invitations FOR UPDATE
+USING (auth.uid() = invited_user_id)
+WITH CHECK (auth.uid() = invited_user_id);
+
+CREATE POLICY "Davet edilen kullanıcı daveti silebilir."
+ON public.lobby_invitations FOR DELETE
+USING (auth.uid() = invited_user_id);
+
 
 ---
 -- NOTIFICATIONS Tablosu Politikaları
@@ -154,6 +181,52 @@ WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = user_id);
 
 CREATE POLICY "Kullanıcılar kendi katılımlarını silebilir."
 ON public.tournament_participants FOR DELETE
+USING (auth.uid() = user_id);
+
+
+---
+-- TOURNAMENT_INVITATIONS Tablosu Politikaları
+---
+ALTER TABLE public.tournament_invitations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Kullanıcılar kendi davetlerini görebilir."
+ON public.tournament_invitations FOR SELECT
+USING (auth.uid() = invited_user_id OR auth.uid() = inviter_user_id);
+
+CREATE POLICY "Giriş yapmış kullanıcılar davet gönderebilir."
+ON public.tournament_invitations FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = inviter_user_id);
+
+CREATE POLICY "Davet edilen kullanıcı daveti yanıtlayabilir."
+ON public.tournament_invitations FOR UPDATE
+USING (auth.uid() = invited_user_id)
+WITH CHECK (auth.uid() = invited_user_id);
+
+CREATE POLICY "Davet edilen kullanıcı daveti silebilir."
+ON public.tournament_invitations FOR DELETE
+USING (auth.uid() = invited_user_id);
+
+
+---
+-- USER_GAME_PROFILES Tablosu Politikaları
+---
+ALTER TABLE public.user_game_profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Kullanıcılar kendi oyun profillerini görebilir."
+ON public.user_game_profiles FOR SELECT
+USING (auth.uid() = user_id);
+
+CREATE POLICY "Kullanıcılar kendi oyun profillerini oluşturabilir."
+ON public.user_game_profiles FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = user_id);
+
+CREATE POLICY "Kullanıcılar kendi oyun profillerini güncelleyebilir."
+ON public.user_game_profiles FOR UPDATE
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Kullanıcılar kendi oyun profillerini silebilir."
+ON public.user_game_profiles FOR DELETE
 USING (auth.uid() = user_id);
 
 

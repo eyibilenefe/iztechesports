@@ -5,7 +5,7 @@ import { Colors } from '../../constants/Colors'
 import { dbService } from '../../services/supabase'
 import { useAuth } from '../../context/AuthContext'
 
-const TournamentDetailsScreen = ({ route }) => {
+const TournamentDetailsScreen = ({ route, navigation }) => {
   const { tournament } = route.params || {}
   const { user } = useAuth()
   const [lobbies, setLobbies] = useState([])
@@ -18,6 +18,13 @@ const TournamentDetailsScreen = ({ route }) => {
   const [lobbyDetailModalVisible, setLobbyDetailModalVisible] = useState(false);
   const [joinRequests, setJoinRequests] = useState([]);
   const [loadingRequests, setLoadingRequests] = useState(false);
+  
+  // Yeni state'ler
+  const [selectedParticipant, setSelectedParticipant] = useState(null);
+  const [participantProfileModalVisible, setParticipantProfileModalVisible] = useState(false);
+  const [inviteModalVisible, setInviteModalVisible] = useState(false);
+  const [inviteUsername, setInviteUsername] = useState('');
+  const [inviting, setInviting] = useState(false);
 
   useEffect(() => {
     if (tournament?.id) {
@@ -76,13 +83,67 @@ const TournamentDetailsScreen = ({ route }) => {
     return lobby.lobby_join_requests.some(r => r.user_id === user.id && r.status === 'pending');
   };
 
+  // Database'den istek durumunu kontrol et
+  const [requestStatus, setRequestStatus] = useState({});
+  
+  // Lobi için istek durumunu kontrol et
+  const checkRequestStatus = async (lobbyId) => {
+    if (!user) return;
+    
+    const { data, error } = await dbService.checkLobbyJoinRequest(lobbyId, user.id);
+    setRequestStatus(prev => ({
+      ...prev,
+      [lobbyId]: data ? 'requested' : 'not_requested'
+    }));
+  };
+
+  // Turnuva için oyun profili kontrolü
+  const checkGameProfile = async () => {
+    if (!user || !tournament?.id) return { hasProfile: false, missingGame: null };
+    
+    try {
+      const { hasRequiredProfiles, missingGame, error } = await dbService.checkRequiredGameProfiles(user.id, tournament.id);
+      
+      if (error) {
+        console.error('Oyun profili kontrol hatası:', error);
+        return { hasProfile: false, missingGame: null };
+      }
+      
+      return { hasProfile: hasRequiredProfiles, missingGame };
+    } catch (error) {
+      console.error('Oyun profili kontrol hatası:', error);
+      return { hasProfile: false, missingGame: null };
+    }
+  };
+
   // Katıl butonu (artık istek gönderiyor)
   const handleRequestJoinLobby = async (lobbyId) => {
     if (!user) return;
+    
+    // Önce oyun profili kontrolü yap
+    const { hasProfile, missingGame } = await checkGameProfile();
+    
+    if (!hasProfile) {
+      Alert.alert(
+        'Oyun Profili Gerekli', 
+        'Bu turnuvaya katılmak için önce oyun profilinizi oluşturmanız gerekiyor. Profil ekranından oyun profillerinizi yönetebilirsiniz.',
+        [
+          { text: 'İptal', style: 'cancel' },
+          { 
+            text: 'Profil Oluştur', 
+            onPress: () => navigation.navigate('UserGameProfiles')
+          }
+        ]
+      );
+      return;
+    }
+    
     const { error } = await dbService.requestJoinLobby(lobbyId, user.id);
     if (!error) {
       Alert.alert('İstek Gönderildi', 'Katılım isteğiniz gönderildi, lobi sahibi onaylarsa katılacaksınız.');
       fetchLobbies();
+      // İstek durumunu güncelle
+      checkRequestStatus(lobbyId);
     } else {
       Alert.alert('Hata', 'İstek gönderilemedi!');
     }
@@ -91,9 +152,28 @@ const TournamentDetailsScreen = ({ route }) => {
   // Katılım isteğini geri çek
   const handleCancelJoinRequest = async (lobbyId) => {
     if (!user) return;
+    
+    // Önce database'den istek durumunu kontrol et
+    const { data: request, error: checkError } = await dbService.checkLobbyJoinRequest(lobbyId, user.id);
+    
+    if (checkError || !request) {
+      Alert.alert('Hata', 'İstek bulunamadı veya zaten iptal edilmiş.');
+      fetchLobbies();
+      return;
+    }
+    
     const { error } = await dbService.cancelJoinRequest(lobbyId, user.id);
-    if (!error) fetchLobbies();
-    else Alert.alert('Hata', 'İstek geri alınamadı!');
+    if (!error) {
+      Alert.alert('Başarılı', 'Katılım isteğiniz iptal edildi.');
+      fetchLobbies();
+      // İstek durumunu güncelle
+      setRequestStatus(prev => ({
+        ...prev,
+        [lobbyId]: 'not_requested'
+      }));
+    } else {
+      Alert.alert('Hata', 'İstek geri alınamadı!');
+    }
   };
 
   // Sil butonu
@@ -115,6 +195,11 @@ const TournamentDetailsScreen = ({ route }) => {
     } else {
       setJoinRequests([]);
     }
+    
+    // Kullanıcı lobi sahibi değilse istek durumunu kontrol et
+    if (selectedLobby && user && selectedLobby.creator_user_id !== user.id) {
+      checkRequestStatus(selectedLobby.id);
+    }
   }, [selectedLobby, user]);
 
   const loadJoinRequests = async (lobbyId) => {
@@ -133,6 +218,54 @@ const TournamentDetailsScreen = ({ route }) => {
     } else {
       Alert.alert('Hata', 'İşlem başarısız!');
     }
+  };
+
+  // Katılımcı profili görüntüleme
+  const handleViewParticipantProfile = (participant) => {
+    setSelectedParticipant(participant);
+    setParticipantProfileModalVisible(true);
+  };
+
+  // Davet gönderme
+  const handleInviteUser = async () => {
+    if (!inviteUsername.trim()) {
+      Alert.alert('Hata', 'Kullanıcı adı giriniz.');
+      return;
+    }
+
+    setInviting(true);
+    try {
+      // Kullanıcıyı bul
+      const { data: userData, error: userError } = await dbService.getUserByUsername(inviteUsername.trim());
+      
+      if (userError || !userData) {
+        Alert.alert('Hata', 'Kullanıcı bulunamadı.');
+        setInviting(false);
+        return;
+      }
+
+      // Kullanıcı zaten lobide mi kontrol et
+      const isAlreadyInLobby = selectedLobby.lobby_participants?.some(p => p.user_id === userData.id);
+      if (isAlreadyInLobby) {
+        Alert.alert('Hata', 'Bu kullanıcı zaten lobide.');
+        setInviting(false);
+        return;
+      }
+
+      // Davet gönder
+      const { error: inviteError } = await dbService.inviteUserToLobby(selectedLobby.id, userData.id, user.id);
+      
+      if (!inviteError) {
+        Alert.alert('Başarılı', 'Davet gönderildi!');
+        setInviteModalVisible(false);
+        setInviteUsername('');
+      } else {
+        Alert.alert('Hata', 'Davet gönderilemedi.');
+      }
+    } catch (error) {
+      Alert.alert('Hata', 'Bir hata oluştu.');
+    }
+    setInviting(false);
   };
 
   if (!tournament) {
@@ -234,20 +367,23 @@ const TournamentDetailsScreen = ({ route }) => {
                 <Text style={{ fontWeight: 'bold', fontSize: 16 }}>{lobby.profiles?.username || 'Kullanıcı'}</Text>
                 <Text style={{ color: Colors.text.secondary }}>Katılımcı: {participantCount}/{maxCount}</Text>
                 <Text style={{ color: Colors.text.secondary }}>Oluşturulma: {new Date(lobby.created_at).toLocaleString('tr-TR')}</Text>
-                <View style={{ flexDirection: 'row', marginTop: 8 }}>
-                  {!isOwner && !userInLobby && !userRequested && participantCount < maxCount && (
-                    <TouchableOpacity
-                      style={{ backgroundColor: Colors.primary, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6, marginRight: 10 }}
-                      onPress={() => handleRequestJoinLobby(lobby.id)}
-                    >
-                      <Text style={{ color: '#fff', fontWeight: 'bold' }}>Katıl</Text>
-                    </TouchableOpacity>
-                  )}
-                  {!isOwner && userRequested && (
-                    <View style={{ backgroundColor: Colors.card.border, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6, marginRight: 10 }}>
-                      <Text style={{ color: Colors.text.secondary, fontWeight: 'bold' }}>İstek Gönderildi</Text>
-                    </View>
-                  )}
+                                 <View style={{ flexDirection: 'row', marginTop: 8 }}>
+                   {!isOwner && !userInLobby && !userRequested && participantCount < maxCount && (
+                     <TouchableOpacity
+                       style={{ backgroundColor: Colors.primary, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6, marginRight: 10 }}
+                       onPress={() => handleRequestJoinLobby(lobby.id)}
+                     >
+                       <Text style={{ color: '#fff', fontWeight: 'bold' }}>Katıl</Text>
+                     </TouchableOpacity>
+                   )}
+                   {!isOwner && (userRequested || requestStatus[lobby.id] === 'requested') && (
+                     <TouchableOpacity
+                       style={{ backgroundColor: Colors.card.border, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6, marginRight: 10 }}
+                       onPress={() => handleCancelJoinRequest(lobby.id)}
+                     >
+                       <Text style={{ color: Colors.text.secondary, fontWeight: 'bold' }}>İsteği Geri Al</Text>
+                     </TouchableOpacity>
+                   )}
                   {!isOwner && userInLobby && (
                     <View style={{ backgroundColor: Colors.success, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6, marginRight: 10 }}>
                       <Text style={{ color: '#fff', fontWeight: 'bold' }}>Katılımcısınız</Text>
@@ -275,113 +411,115 @@ const TournamentDetailsScreen = ({ route }) => {
         onRequestClose={() => setLobbyDetailModalVisible(false)}
       >
         <View style={{ flex:1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 24, width: '90%' }}>
-            <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 12 }}>Lobi Detayları</Text>
-            {selectedLobby && (
-              <>
-                <Text style={{ fontWeight: 'bold', fontSize: 16 }}>{selectedLobby.name || 'Lobi'}</Text>
-                {selectedLobby.description ? <Text style={{ color: Colors.text.secondary, marginBottom: 6 }}>{selectedLobby.description}</Text> : null}
-                <Text style={{ color: Colors.text.secondary }}>Oluşturan: {selectedLobby.profiles?.username || 'Kullanıcı'}</Text>
-                <Text style={{ color: Colors.text.secondary }}>Maksimum Katılımcı: {selectedLobby.max_participants}</Text>
-                <Text style={{ color: Colors.text.secondary }}>Oluşturulma: {new Date(selectedLobby.created_at).toLocaleString('tr-TR')}</Text>
-                {/* Katıl butonu modalda */}
-                {(() => {
-                  const userInLobby = isUserInLobby(selectedLobby);
-                  const userRequested = isUserRequested(selectedLobby);
-                  const isOwner = user && selectedLobby.creator_user_id === user.id;
-                  const participantCount = Array.isArray(selectedLobby.lobby_participants)
-                    ? selectedLobby.lobby_participants.length
-                    : (typeof selectedLobby.lobby_participants?.count === 'number' ? selectedLobby.lobby_participants.count : 1);
-                  const maxCount = selectedLobby.max_participants || 8;
-                  if (!isOwner && !userInLobby && !userRequested && participantCount < maxCount) {
-                    return (
-                      <TouchableOpacity
-                        style={{ backgroundColor: Colors.primary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 10, marginBottom: 10 }}
-                        onPress={() => handleRequestJoinLobby(selectedLobby.id)}
-                      >
-                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>Katıl</Text>
-                      </TouchableOpacity>
-                    );
-                  } else if (!isOwner && userRequested) {
-                    return (
-                      <TouchableOpacity
-                        style={{ backgroundColor: Colors.card.border, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 10, marginBottom: 10 }}
-                        onPress={() => handleCancelJoinRequest(selectedLobby.id)}
-                      >
-                        <Text style={{ color: Colors.text.secondary, fontWeight: 'bold' }}>İsteği Geri Al</Text>
-                      </TouchableOpacity>
-                    );
-                  } else if (!isOwner && userInLobby) {
-                    return (
-                      <View style={{ backgroundColor: Colors.success, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 10, marginBottom: 10 }}>
-                        <Text style={{ color: '#fff', fontWeight: 'bold' }}>Katılımcısınız</Text>
-                      </View>
-                    );
-                  }
-                  return null;
-                })()}
-                <Text style={{ fontWeight: 'bold', marginTop: 12 }}>Katılımcılar:</Text>
-                {Array.isArray(selectedLobby.lobby_participants) && selectedLobby.lobby_participants.length > 0 ? (
-                  selectedLobby.lobby_participants.map((p, idx) => (
-                    <View key={p.user_id || idx} style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8, marginBottom: 2 }}>
-                      {p.profiles?.profile_picture_url && (
-                        <Image source={{ uri: p.profiles.profile_picture_url }} style={{ width: 24, height: 24, borderRadius: 12, marginRight: 6 }} />
-                      )}
-                      <Text style={{ color: Colors.text.primary }}>
-                        {p.profiles?.username || p.user_id}
-                      </Text>
-                      {/* Katılımcı silme butonu sadece lobi sahibi için ve kendisi hariç */}
-                      {user && selectedLobby.creator_user_id === user.id && p.user_id !== user.id && (
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 24, width: '90%', maxHeight: '80%' }}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 12 }}>Lobi Detayları</Text>
+              {selectedLobby && (
+                <>
+                  <Text style={{ fontWeight: 'bold', fontSize: 16 }}>{selectedLobby.name || 'Lobi'}</Text>
+                  {selectedLobby.description ? <Text style={{ color: Colors.text.secondary, marginBottom: 6 }}>{selectedLobby.description}</Text> : null}
+                  <Text style={{ color: Colors.text.secondary }}>Oluşturan: {selectedLobby.profiles?.username || 'Kullanıcı'}</Text>
+                  <Text style={{ color: Colors.text.secondary }}>Maksimum Katılımcı: {selectedLobby.max_participants}</Text>
+                  <Text style={{ color: Colors.text.secondary }}>Oluşturulma: {new Date(selectedLobby.created_at).toLocaleString('tr-TR')}</Text>
+                  {/* Katıl butonu modalda */}
+                  {(() => {
+                    const userInLobby = isUserInLobby(selectedLobby);
+                    const userRequested = isUserRequested(selectedLobby);
+                    const isOwner = user && selectedLobby.creator_user_id === user.id;
+                    const participantCount = Array.isArray(selectedLobby.lobby_participants)
+                      ? selectedLobby.lobby_participants.length
+                      : (typeof selectedLobby.lobby_participants?.count === 'number' ? selectedLobby.lobby_participants.count : 1);
+                    const maxCount = selectedLobby.max_participants || 8;
+                    if (!isOwner && !userInLobby && !userRequested && participantCount < maxCount) {
+                      return (
                         <TouchableOpacity
-                          onPress={async () => {
-                            Alert.alert('Katılımcıyı Sil', `${p.profiles?.username || p.user_id} kullanıcısını lobiden silmek istediğine emin misin?`, [
-                              { text: 'İptal', style: 'cancel' },
-                              { text: 'Sil', style: 'destructive', onPress: async () => {
-                                const { error } = await dbService.removeLobbyParticipant(selectedLobby.id, p.user_id);
-                                if (!error) {
-                                  // Katılımcı silindi, lobileri güncelle
-                                  fetchLobbies();
-                                } else {
-                                  Alert.alert('Hata', 'Katılımcı silinemedi!');
-                                }
-                              }}
-                            ]);
-                          }}
-                          style={{ marginLeft: 10, backgroundColor: Colors.error, padding: 4, borderRadius: 6 }}
+                          style={{ backgroundColor: Colors.primary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 10, marginBottom: 10 }}
+                          onPress={() => handleRequestJoinLobby(selectedLobby.id)}
                         >
-                          <Ionicons name="trash" size={16} color="#fff" />
+                          <Text style={{ color: '#fff', fontWeight: 'bold' }}>Katıl</Text>
                         </TouchableOpacity>
+                      );
+                                         } else if (!isOwner && (userRequested || requestStatus[selectedLobby.id] === 'requested')) {
+                       return (
+                         <TouchableOpacity
+                           style={{ backgroundColor: Colors.card.border, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 10, marginBottom: 10 }}
+                           onPress={() => handleCancelJoinRequest(selectedLobby.id)}
+                         >
+                           <Text style={{ color: Colors.text.secondary, fontWeight: 'bold' }}>İsteği Geri Al</Text>
+                         </TouchableOpacity>
+                       );
+                     } else if (!isOwner && userInLobby) {
+                      return (
+                        <View style={{ backgroundColor: Colors.success, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 10, marginBottom: 10 }}>
+                          <Text style={{ color: '#fff', fontWeight: 'bold' }}>Katılımcısınız</Text>
+                        </View>
+                      );
+                    }
+                    return null;
+                  })()}
+                  
+                  {/* Davet butonu - sadece lobi sahibi için */}
+                  {user && selectedLobby.creator_user_id === user.id && (
+                    <TouchableOpacity
+                      style={{ backgroundColor: Colors.warning, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 10, marginBottom: 10 }}
+                      onPress={() => setInviteModalVisible(true)}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: 'bold' }}>Kullanıcı Davet Et</Text>
+                    </TouchableOpacity>
+                  )}
+                  
+                  <Text style={{ fontWeight: 'bold', marginTop: 12 }}>Katılımcılar:</Text>
+                  {Array.isArray(selectedLobby.lobby_participants) && selectedLobby.lobby_participants.length > 0 ? (
+                    selectedLobby.lobby_participants.map((p, idx) => (
+                      <TouchableOpacity 
+                        key={p.user_id || idx} 
+                        style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8, marginBottom: 8, padding: 8, backgroundColor: Colors.card.background, borderRadius: 8 }}
+                        onPress={() => handleViewParticipantProfile(p)}
+                      >
+                        {p.profiles?.profile_picture_url && (
+                          <Image source={{ uri: p.profiles.profile_picture_url }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: 8 }} />
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: Colors.text.primary, fontWeight: 'bold' }}>
+                            {p.profiles?.username || p.user_id}
+                          </Text>
+                          <Text style={{ color: Colors.text.secondary, fontSize: 12 }}>
+                            {p.profiles?.full_name || 'İsim belirtilmemiş'}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={20} color={Colors.text.secondary} />
+                      </TouchableOpacity>
+                    ))
+                  ) : (
+                    <Text style={{ color: Colors.text.secondary, marginLeft: 8 }}>Henüz katılımcı yok.</Text>
+                  )}
+                  
+                  {/* Lobi sahibi için gelen istekler */}
+                  {user && selectedLobby.creator_user_id === user.id && (
+                    <View style={{ marginTop: 18 }}>
+                      <Text style={{ fontWeight: 'bold', marginBottom: 6 }}>Gelen Katılım İstekleri:</Text>
+                      {loadingRequests ? (
+                        <Text>Yükleniyor...</Text>
+                      ) : joinRequests.length === 0 ? (
+                        <Text style={{ color: Colors.text.secondary }}>Bekleyen istek yok.</Text>
+                      ) : (
+                        joinRequests.filter(r => r.status === 'pending').map(req => (
+                          <View key={req.id} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                            <Text style={{ flex: 1 }}>{req.profiles?.username || req.user_id}</Text>
+                            <TouchableOpacity onPress={() => handleRespondJoinRequest(req.id, 'approved', selectedLobby.id, req.user_id)} style={{ backgroundColor: Colors.success, padding: 6, borderRadius: 6, marginRight: 8 }}>
+                              <Text style={{ color: '#fff' }}>Onayla</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => handleRespondJoinRequest(req.id, 'rejected', selectedLobby.id, req.user_id)} style={{ backgroundColor: Colors.error, padding: 6, borderRadius: 6 }}>
+                              <Text style={{ color: '#fff' }}>Reddet</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ))
                       )}
                     </View>
-                  ))
-                ) : (
-                  <Text style={{ color: Colors.text.secondary, marginLeft: 8 }}>Henüz katılımcı yok.</Text>
-                )}
-                {/* Lobi sahibi için gelen istekler */}
-                {user && selectedLobby.creator_user_id === user.id && (
-                  <View style={{ marginTop: 18 }}>
-                    <Text style={{ fontWeight: 'bold', marginBottom: 6 }}>Gelen Katılım İstekleri:</Text>
-                    {loadingRequests ? (
-                      <Text>Yükleniyor...</Text>
-                    ) : joinRequests.length === 0 ? (
-                      <Text style={{ color: Colors.text.secondary }}>Bekleyen istek yok.</Text>
-                    ) : (
-                      joinRequests.filter(r => r.status === 'pending').map(req => (
-                        <View key={req.id} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
-                          <Text style={{ flex: 1 }}>{req.profiles?.username || req.user_id}</Text>
-                          <TouchableOpacity onPress={() => handleRespondJoinRequest(req.id, 'approved', selectedLobby.id, req.user_id)} style={{ backgroundColor: Colors.success, padding: 6, borderRadius: 6, marginRight: 8 }}>
-                            <Text style={{ color: '#fff' }}>Onayla</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity onPress={() => handleRespondJoinRequest(req.id, 'rejected', selectedLobby.id, req.user_id)} style={{ backgroundColor: Colors.error, padding: 6, borderRadius: 6 }}>
-                            <Text style={{ color: '#fff' }}>Reddet</Text>
-                          </TouchableOpacity>
-                        </View>
-                      ))
-                    )}
-                  </View>
-                )}
-              </>
-            )}
+                  )}
+                </>
+              )}
+            </ScrollView>
             <TouchableOpacity
               onPress={() => setLobbyDetailModalVisible(false)}
               style={{ marginTop: 20, alignSelf: 'flex-end' }}
@@ -391,8 +529,97 @@ const TournamentDetailsScreen = ({ route }) => {
           </View>
         </View>
       </Modal>
-      {/* Lobi Detay Modalı Sonu */}
-      {/* Diğer detaylar buraya eklenebilir */}
+      
+      {/* Katılımcı Profil Modalı */}
+      <Modal
+        visible={participantProfileModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setParticipantProfileModalVisible(false)}
+      >
+        <View style={{ flex:1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 24, width: '85%' }}>
+            {selectedParticipant && (
+              <>
+                <View style={{ alignItems: 'center', marginBottom: 20 }}>
+                  {selectedParticipant.profiles?.profile_picture_url && (
+                    <Image 
+                      source={{ uri: selectedParticipant.profiles.profile_picture_url }} 
+                      style={{ width: 80, height: 80, borderRadius: 40, marginBottom: 12 }} 
+                    />
+                  )}
+                  <Text style={{ fontSize: 20, fontWeight: 'bold', color: Colors.text.primary }}>
+                    {selectedParticipant.profiles?.username || 'Kullanıcı'}
+                  </Text>
+                  <Text style={{ color: Colors.text.secondary, marginTop: 4 }}>
+                    {selectedParticipant.profiles?.full_name || 'İsim belirtilmemiş'}
+                  </Text>
+                </View>
+                
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ fontWeight: 'bold', marginBottom: 8 }}>Profil Bilgileri:</Text>
+                  <Text style={{ color: Colors.text.secondary, marginBottom: 4 }}>
+                    Kullanıcı ID: {selectedParticipant.user_id}
+                  </Text>
+                  <Text style={{ color: Colors.text.secondary, marginBottom: 4 }}>
+                    Katılım Tarihi: {new Date(selectedParticipant.joined_at).toLocaleString('tr-TR')}
+                  </Text>
+                </View>
+                
+                {/* Oyun profilleri buraya eklenebilir */}
+                <Text style={{ fontWeight: 'bold', marginBottom: 8 }}>Oyun Profilleri:</Text>
+                <Text style={{ color: Colors.text.secondary }}>
+                  Oyun profilleri yakında eklenecek...
+                </Text>
+              </>
+            )}
+            <TouchableOpacity
+              onPress={() => setParticipantProfileModalVisible(false)}
+              style={{ marginTop: 20, alignSelf: 'flex-end' }}
+            >
+              <Text style={{ color: Colors.primary, fontWeight: 'bold', fontSize: 16 }}>Kapat</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      
+      {/* Davet Modalı */}
+      <Modal
+        visible={inviteModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setInviteModalVisible(false)}
+      >
+        <View style={{ flex:1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 24, width: '85%' }}>
+            <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>Kullanıcı Davet Et</Text>
+            <TextInput
+              placeholder="Kullanıcı adı girin"
+              value={inviteUsername}
+              onChangeText={setInviteUsername}
+              style={{ borderWidth: 1, borderColor: Colors.card.border, borderRadius: 8, padding: 12, marginBottom: 16 }}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+              <TouchableOpacity
+                onPress={() => setInviteModalVisible(false)}
+                style={{ marginRight: 16 }}
+                disabled={inviting}
+              >
+                <Text style={{ color: Colors.text.secondary, fontSize: 16 }}>İptal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleInviteUser}
+                style={{ backgroundColor: Colors.primary, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 8 }}
+                disabled={inviting}
+              >
+                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>
+                  {inviting ? 'Gönderiliyor...' : 'Davet Gönder'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   )
 }

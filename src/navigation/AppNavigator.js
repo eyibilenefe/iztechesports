@@ -17,6 +17,9 @@ import ProfileScreen from '../screens/main/ProfileScreen'
 import NotificationsScreen from '../screens/main/NotificationsScreen'
 import TournamentDetailsScreen from '../screens/main/TournamentDetailsScreen'
 
+import UserGameProfilesScreen from '../screens/main/UserGameProfilesScreen'
+import UserSearchScreen from '../screens/main/UserSearchScreen'
+
 const Stack = createStackNavigator()
 const Tab = createBottomTabNavigator()
 
@@ -159,6 +162,9 @@ const AppNavigator = () => {
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="MainTabs" component={MainTabs} />
           <Stack.Screen name="TournamentDetails" component={TournamentDetailsScreen} options={{ headerShown: true, headerTitle: 'Turnuva Detayları' }} />
+
+          <Stack.Screen name="UserGameProfiles" component={UserGameProfilesScreen} options={{ headerShown: true, headerTitle: 'Oyun Profilleri' }} />
+          <Stack.Screen name="UserSearch" component={UserSearchScreen} options={{ headerShown: true, headerTitle: '👥 Kullanıcı Ara' }} />
         </Stack.Navigator>
       ) : (
         <AuthStack />

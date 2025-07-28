@@ -19,6 +19,7 @@ import * as Animatable from 'react-native-animatable'
 import { useAuth } from '../../context/AuthContext'
 import { dbService } from '../../services/supabase'
 import { Colors, GameColors } from '../../constants/Colors'
+import TournamentJoinModal from './TournamentJoinModal'
 
 const { width, height } = Dimensions.get('window')
 
@@ -32,6 +33,8 @@ const TournamentsScreen = ({ navigation }) => {
   const [searchQuery, setSearchQuery] = useState('')
   const [games, setGames] = useState([])
   const [userParticipations, setUserParticipations] = useState([])
+  const [joinModalVisible, setJoinModalVisible] = useState(false)
+  const [selectedTournament, setSelectedTournament] = useState(null)
 
   const searchRef = useRef()
 
@@ -197,7 +200,7 @@ const TournamentsScreen = ({ navigation }) => {
             {status.status === 'open' && !participating && (
               <TouchableOpacity 
                 style={[styles.actionButton, styles.joinButton]}
-                onPress={() => handleJoinTournament(tournament.id)}
+                onPress={() => handleJoinTournament(tournament)}
               >
                 <Ionicons name="add-circle" size={16} color={Colors.text.white} />
                 <Text style={[styles.actionButtonText, { color: Colors.text.white }]}>Katıl</Text>
@@ -216,14 +219,13 @@ const TournamentsScreen = ({ navigation }) => {
     )
   }
 
-  const handleJoinTournament = async (tournamentId) => {
-    try {
-      // Burada turnuvaya katılma işlemi yapılacak
-      console.log('Turnuvaya katılma:', tournamentId)
-      // TODO: Implement tournament participation
-    } catch (error) {
-      console.error('Turnuvaya katılma hatası:', error)
-    }
+  const handleJoinTournament = (tournament) => {
+    setSelectedTournament(tournament)
+    setJoinModalVisible(true)
+  }
+
+  const handleJoinSuccess = () => {
+    loadData() // Refresh data after successful join
   }
 
   const GameFilter = () => (
@@ -331,6 +333,17 @@ const TournamentsScreen = ({ navigation }) => {
           )}
         </View>
       </ScrollView>
+
+      {/* Tournament Join Modal */}
+      <TournamentJoinModal
+        visible={joinModalVisible}
+        onClose={() => {
+          setJoinModalVisible(false)
+          setSelectedTournament(null)
+        }}
+        tournament={selectedTournament}
+        onSuccess={handleJoinSuccess}
+      />
     </View>
   )
 }

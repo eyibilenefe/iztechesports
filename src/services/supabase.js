@@ -83,6 +83,140 @@ export const dbService = {
     return { data, error }
   },
 
+  // Kullanıcı adına göre kullanıcı bul
+  async getUserByUsername(username) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('username', username)
+      .single()
+    return { data, error }
+  },
+
+  // Kullanıcının lobiye istek gönderip göndermediğini kontrol et
+  async checkLobbyJoinRequest(lobby_id, user_id) {
+    const { data, error } = await supabase
+      .from('lobby_join_requests')
+      .select('*')
+      .eq('lobby_id', lobby_id)
+      .eq('user_id', user_id)
+      .eq('status', 'pending')
+      .single()
+    return { data, error }
+  },
+
+  // Kullanıcının oyun profili var mı kontrol et
+  async checkUserGameProfile(user_id, game_id) {
+    const { data, error } = await supabase
+      .from('user_game_profiles')
+      .select('*')
+      .eq('user_id', user_id)
+      .eq('game_id', game_id)
+      .maybeSingle()
+    return { data, error }
+  },
+
+  // Kullanıcının turnuvaya katılmak için gerekli oyun profillerini kontrol et
+  async checkRequiredGameProfiles(user_id, tournament_id) {
+    try {
+      // Önce turnuvanın oyununu al
+      const { data: tournament, error: tournamentError } = await supabase
+        .from('tournaments')
+        .select('game_id')
+        .eq('id', tournament_id)
+        .single()
+
+      if (tournamentError || !tournament) {
+        return { hasRequiredProfiles: false, missingGame: null, error: tournamentError }
+      }
+
+      // Kullanıcının bu oyun için profili var mı kontrol et
+      const { data: profile, error: profileError } = await supabase
+        .from('user_game_profiles')
+        .select('*')
+        .eq('user_id', user_id)
+        .eq('game_id', tournament.game_id)
+        .maybeSingle()
+
+      // maybeSingle() null döndürürse profil yok demektir
+      if (!profile) {
+        return { 
+          hasRequiredProfiles: false, 
+          missingGame: tournament.game_id, 
+          error: null 
+        }
+      }
+
+      return { hasRequiredProfiles: true, missingGame: null, error: null }
+    } catch (error) {
+      console.error('Oyun profili kontrol hatası:', error)
+      return { hasRequiredProfiles: false, missingGame: null, error }
+    }
+  },
+
+  // Kullanıcı arama (kullanıcı adı veya isim ile)
+  async searchUsers(query) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select(`
+        *,
+        tournament_participants(count),
+        tournament_matches(count)
+      `)
+      .or(`username.ilike.%${query}%,full_name.ilike.%${query}%`)
+      .limit(20)
+      .order('username')
+    return { data, error }
+  },
+
+  // Kullanıcının detaylı profil bilgilerini al
+  async getUserDetailedProfile(userId) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select(`
+        *,
+        user_game_profiles(
+          *,
+          games(name, icon_url)
+        ),
+        tournament_participants(
+          tournaments(name)
+        ),
+        tournament_matches(
+          tournaments(name),
+          result
+        )
+      `)
+      .eq('id', userId)
+      .single()
+
+    if (!error && data) {
+      // İstatistikleri hesapla
+      const tournamentCount = data.tournament_participants?.length || 0
+      const matchCount = data.tournament_matches?.length || 0
+      const winCount = data.tournament_matches?.filter(m => m.result === 'win').length || 0
+      const winRate = matchCount > 0 ? Math.round((winCount / matchCount) * 100) : 0
+
+      // Son 3 maçı al
+      const recentMatches = data.tournament_matches?.slice(0, 3) || []
+
+      return {
+        data: {
+          ...data,
+          tournament_count: tournamentCount,
+          match_count: matchCount,
+          win_count: winCount,
+          win_rate: winRate,
+          recent_matches: recentMatches,
+          game_profiles: data.user_game_profiles || []
+        },
+        error: null
+      }
+    }
+
+    return { data: null, error }
+  },
+
   // Oyunları al
   async getGames() {
     const { data, error } = await supabase
@@ -445,7 +579,17 @@ export const dbService = {
       .single();
     // Onaylandıysa katılımcı olarak ekle
     if (!error && status === 'approved') {
-      await supabase.from('lobby_participants').insert([{ lobby_id, user_id }]);
+      const { error: joinError } = await supabase
+        .from('lobby_participants')
+        .insert([{ 
+          lobby_id, 
+          user_id,
+          joined_at: new Date().toISOString()
+        }]);
+      if (joinError) {
+        console.error('Lobi katılım hatası:', joinError);
+        return { data, error: joinError };
+      }
     }
     return { data, error };
   },
@@ -467,6 +611,250 @@ export const dbService = {
       .delete()
       .eq('lobby_id', lobby_id)
       .eq('user_id', user_id);
+    return { error };
+  },
+
+  // Turnuva katılımcısını sil
+  async removeTournamentParticipant(tournament_id, user_id) {
+    const { error } = await supabase
+      .from('tournament_participants')
+      .delete()
+      .eq('tournament_id', tournament_id)
+      .eq('user_id', user_id);
+    return { error };
+  },
+
+  // Kullanıcı davet et
+  async inviteUserToLobby(lobby_id, invited_user_id, inviter_user_id) {
+    // Önce davet kaydı oluştur
+    const { data, error } = await supabase
+      .from('lobby_invitations')
+      .insert([
+        { 
+          lobby_id, 
+          invited_user_id, 
+          inviter_user_id, 
+          status: 'pending',
+          invited_at: new Date().toISOString()
+        }
+      ])
+      .select()
+      .single();
+
+    if (!error && data) {
+      // Davet edilen kullanıcıya bildirim gönder
+      await supabase.from('notifications').insert([
+        {
+          user_id: invited_user_id,
+          content: 'Bir lobiye davet edildiniz!',
+          link: `lobby:${lobby_id}`
+        }
+      ]);
+    }
+
+    return { data, error };
+  },
+
+  // Turnuva davet et
+  async inviteUserToTournament(tournament_id, invited_user_id, inviter_user_id) {
+    // Önce davet kaydı oluştur
+    const { data, error } = await supabase
+      .from('tournament_invitations')
+      .insert([
+        { 
+          tournament_id, 
+          invited_user_id, 
+          inviter_user_id, 
+          status: 'pending',
+          invited_at: new Date().toISOString()
+        }
+      ])
+      .select()
+      .single();
+
+    if (!error && data) {
+      // Davet edilen kullanıcıya bildirim gönder
+      await supabase.from('notifications').insert([
+        {
+          user_id: invited_user_id,
+          content: 'Bir turnuvaya davet edildiniz!',
+          link: `tournament:${tournament_id}`
+        }
+      ]);
+    }
+
+    return { data, error };
+  },
+
+  // Davetleri getir
+  async getUserInvitations(user_id) {
+    const { data, error } = await supabase
+      .from('lobby_invitations')
+      .select(`
+        *,
+        lobbies(name, games(name)),
+        profiles!lobby_invitations_inviter_user_id_fkey(username, full_name)
+      `)
+      .eq('invited_user_id', user_id)
+      .eq('status', 'pending')
+      .order('invited_at', { ascending: false });
+    return { data, error };
+  },
+
+  // Turnuva davetlerini getir
+  async getUserTournamentInvitations(user_id) {
+    const { data, error } = await supabase
+      .from('tournament_invitations')
+      .select(`
+        *,
+        tournaments(name, games(name)),
+        profiles!tournament_invitations_inviter_user_id_fkey(username, full_name)
+      `)
+      .eq('invited_user_id', user_id)
+      .eq('status', 'pending')
+      .order('invited_at', { ascending: false });
+    return { data, error };
+  },
+
+  // Davet yanıtla
+  async respondToInvitation(invitation_id, status, invitation_type = 'lobby') {
+    const table = invitation_type === 'tournament' ? 'tournament_invitations' : 'lobby_invitations';
+    const { data, error } = await supabase
+      .from(table)
+      .update({ 
+        status, 
+        responded_at: new Date().toISOString() 
+      })
+      .eq('id', invitation_id)
+      .select()
+      .single();
+    return { data, error };
+  },
+
+  // Kullanıcı oyun profili oluştur/güncelle
+  async createOrUpdateUserGameProfile(user_id, game_id, nickname, rank = null) {
+    // Önce mevcut profili kontrol et
+    const { data: existingProfile } = await supabase
+      .from('user_game_profiles')
+      .select('*')
+      .eq('user_id', user_id)
+      .eq('game_id', game_id)
+      .single();
+
+    if (existingProfile) {
+      // Mevcut profili güncelle
+      const { data, error } = await supabase
+        .from('user_game_profiles')
+        .update({ 
+          nickname, 
+          rank,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingProfile.id)
+        .select()
+        .single();
+      return { data, error };
+    } else {
+      // Yeni profil oluştur
+      const { data, error } = await supabase
+        .from('user_game_profiles')
+        .insert([
+          { 
+            user_id, 
+            game_id, 
+            nickname, 
+            rank,
+            created_at: new Date().toISOString()
+          }
+        ])
+        .select()
+        .single();
+      return { data, error };
+    }
+  },
+
+  // Kullanıcının belirli bir oyun için profilini getir
+  async getUserGameProfile(user_id, game_id) {
+    const { data, error } = await supabase
+      .from('user_game_profiles')
+      .select('*')
+      .eq('user_id', user_id)
+      .eq('game_id', game_id)
+      .single();
+    return { data, error };
+  },
+
+  // Turnuvaya katılırken oyun profili kontrol et/oluştur
+  async joinTournamentWithGameProfile(tournament_id, user_id, game_id, nickname, rank = null) {
+    // Önce oyun profilini oluştur/güncelle
+    const profileResult = await this.createOrUpdateUserGameProfile(user_id, game_id, nickname, rank);
+    
+    if (profileResult.error) {
+      return profileResult;
+    }
+
+    // Sonra turnuvaya katıl
+    const { data, error } = await supabase
+      .from('tournament_participants')
+      .insert([
+        { 
+          tournament_id, 
+          user_id, 
+          participant_type: 'individual',
+          joined_at: new Date().toISOString()
+        }
+      ])
+      .select()
+      .single();
+
+    return { data, error };
+  },
+
+  // Lobiyi davet ile katılırken oyun profili kontrol et/oluştur
+  async joinLobbyWithGameProfile(lobby_id, user_id, game_id, nickname, rank = null) {
+    // Önce oyun profilini oluştur/güncelle
+    const profileResult = await this.createOrUpdateUserGameProfile(user_id, game_id, nickname, rank);
+    
+    if (profileResult.error) {
+      return profileResult;
+    }
+
+    // Sonra lobiye katıl
+    const { data, error } = await supabase
+      .from('lobby_participants')
+      .insert([
+        { 
+          lobby_id, 
+          user_id,
+          joined_at: new Date().toISOString()
+        }
+      ])
+      .select()
+      .single();
+
+    return { data, error };
+  },
+
+  // Kullanıcının tüm oyun profillerini getir
+  async getAllUserGameProfiles(user_id) {
+    const { data, error } = await supabase
+      .from('user_game_profiles')
+      .select(`
+        *,
+        games(name, icon_url)
+      `)
+      .eq('user_id', user_id)
+      .order('created_at', { ascending: false });
+    return { data, error };
+  },
+
+  // Oyun profili sil
+  async deleteUserGameProfile(user_id, game_id) {
+    const { error } = await supabase
+      .from('user_game_profiles')
+      .delete()
+      .eq('user_id', user_id)
+      .eq('game_id', game_id);
     return { error };
   },
 } 
