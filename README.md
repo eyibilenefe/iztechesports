@@ -74,6 +74,3 @@ iYTE E-spor Topluluğu mobil uygulaması, üniversite ve çevresindeki e-spor tu
 
 Pull request'ler ve öneriler memnuniyetle karşılanır. Lütfen önce bir issue açarak değişiklik teklifinizi tartışın.
 
-## Lisans
-
-Bu proje MIT lisansı ile lisanslanmıştır. 
