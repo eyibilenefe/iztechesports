@@ -117,6 +117,47 @@ USING (auth.uid() = user_id);
 
 
 ---
+-- TOURNAMENT_MATCHES Tablosu Politikaları
+---
+ALTER TABLE public.tournament_matches ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Herkes turnuva maçlarını görebilir."
+ON public.tournament_matches FOR SELECT
+USING (true);
+
+CREATE POLICY "Giriş yapmış kullanıcılar turnuva maçları oluşturabilir."
+ON public.tournament_matches FOR INSERT
+WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "Giriş yapmış kullanıcılar turnuva maçlarını güncelleyebilir."
+ON public.tournament_matches FOR UPDATE
+USING (auth.role() = 'authenticated')
+WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "Admin turnuva maçlarını silebilir."
+ON public.tournament_matches FOR DELETE
+USING (auth.role() = 'admin');
+
+
+---
+-- TOURNAMENT_PARTICIPANTS Tablosu Politikaları
+---
+ALTER TABLE public.tournament_participants ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Herkes turnuva katılımcılarını görebilir."
+ON public.tournament_participants FOR SELECT
+USING (true);
+
+CREATE POLICY "Giriş yapmış kullanıcılar turnuvaya katılabilir."
+ON public.tournament_participants FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = user_id);
+
+CREATE POLICY "Kullanıcılar kendi katılımlarını silebilir."
+ON public.tournament_participants FOR DELETE
+USING (auth.uid() = user_id);
+
+
+---
 -- GENEL AMAÇLI TABLOLAR İÇİN POLİTİKALAR
 -- (games, tournaments, announcements, match_history vb.)
 ---
@@ -136,3 +177,8 @@ CREATE POLICY "Herkes maç geçmişini görebilir." ON public.match_history FOR 
 
 ALTER TABLE public.match_participants ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Herkes maç katılımcılarını görebilir." ON public.match_participants FOR SELECT USING (true);
+
+ALTER TABLE public.match_sets ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Herkes set sonuçlarını görebilir." ON public.match_sets FOR SELECT USING (true);
+CREATE POLICY "Giriş yapmış kullanıcılar set sonuçlarını ekleyebilir." ON public.match_sets FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+CREATE POLICY "Giriş yapmış kullanıcılar set sonuçlarını güncelleyebilir." ON public.match_sets FOR UPDATE USING (auth.role() = 'authenticated') WITH CHECK (auth.role() = 'authenticated');

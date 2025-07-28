@@ -330,6 +330,28 @@ const TournamentDetailsScreen = ({ route }) => {
                       <Text style={{ color: Colors.text.primary }}>
                         {p.profiles?.username || p.user_id}
                       </Text>
+                      {/* Katılımcı silme butonu sadece lobi sahibi için ve kendisi hariç */}
+                      {user && selectedLobby.creator_user_id === user.id && p.user_id !== user.id && (
+                        <TouchableOpacity
+                          onPress={async () => {
+                            Alert.alert('Katılımcıyı Sil', `${p.profiles?.username || p.user_id} kullanıcısını lobiden silmek istediğine emin misin?`, [
+                              { text: 'İptal', style: 'cancel' },
+                              { text: 'Sil', style: 'destructive', onPress: async () => {
+                                const { error } = await dbService.removeLobbyParticipant(selectedLobby.id, p.user_id);
+                                if (!error) {
+                                  // Katılımcı silindi, lobileri güncelle
+                                  fetchLobbies();
+                                } else {
+                                  Alert.alert('Hata', 'Katılımcı silinemedi!');
+                                }
+                              }}
+                            ]);
+                          }}
+                          style={{ marginLeft: 10, backgroundColor: Colors.error, padding: 4, borderRadius: 6 }}
+                        >
+                          <Ionicons name="trash" size={16} color="#fff" />
+                        </TouchableOpacity>
+                      )}
                     </View>
                   ))
                 ) : (

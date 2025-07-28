@@ -106,6 +106,128 @@ export const dbService = {
     return { data, error }
   },
 
+  // Bracket sistemi için yeni servisler
+  // Turnuva bracket'ını oluştur
+  async createTournamentBracket(tournamentId, participants) {
+    const { data, error } = await supabase
+      .from('tournament_matches')
+      .insert(participants.map((participant, index) => ({
+        tournament_id: tournamentId,
+        round: 1,
+        match_number: Math.floor(index / 2) + 1,
+        team1_id: participant.team_id,
+        user1_id: participant.user_id,
+        status: 'scheduled'
+      })))
+    return { data, error }
+  },
+
+  // Turnuva bracket'ını getir
+  async getTournamentBracket(tournamentId) {
+    const { data, error } = await supabase
+      .from('tournament_matches')
+      .select(`
+        *,
+        teams!tournament_matches_team1_id_fkey(name, tag, logo_url),
+        teams!tournament_matches_team2_id_fkey(name, tag, logo_url),
+        profiles!tournament_matches_user1_id_fkey(username, full_name),
+        profiles!tournament_matches_user2_id_fkey(username, full_name)
+      `)
+      .eq('tournament_id', tournamentId)
+      .order('round', { ascending: true })
+      .order('match_number', { ascending: true })
+    return { data, error }
+  },
+
+  // Maç skorunu güncelle
+  async updateMatchScore(matchId, score, winnerId, format = 'Bo3') {
+    const { data, error } = await supabase
+      .from('tournament_matches')
+      .update({
+        score: score,
+        winner_team_id: winnerId,
+        status: 'completed'
+      })
+      .eq('id', matchId)
+    return { data, error }
+  },
+
+  // Set skorunu kaydet
+  async saveSetScore(matchId, setData) {
+    const { data, error } = await supabase
+      .from('match_sets')
+      .insert({
+        match_id: matchId,
+        set_number: setData.set_number,
+        team1_score: setData.team1_score,
+        team2_score: setData.team2_score,
+        winner_team_id: setData.winner_team_id,
+        map_name: setData.map_name,
+        duration: setData.duration
+      })
+    return { data, error }
+  },
+
+  // Maç setlerini getir
+  async getMatchSets(matchId) {
+    const { data, error } = await supabase
+      .from('match_sets')
+      .select('*')
+      .eq('match_id', matchId)
+      .order('set_number', { ascending: true })
+    return { data, error }
+  },
+
+  // Turnuva katılımcılarını getir
+  async getTournamentParticipants(tournamentId) {
+    const { data, error } = await supabase
+      .from('tournament_participants')
+      .select(`
+        *,
+        teams(name, tag, logo_url),
+        profiles(username, full_name)
+      `)
+      .eq('tournament_id', tournamentId)
+      .order('joined_at', { ascending: true })
+    return { data, error }
+  },
+
+  // Bracket formatını belirle (Bo3/Bo5)
+  getBracketFormat(participantCount) {
+    if (participantCount <= 8) return 'Bo3'
+    if (participantCount <= 16) return 'Bo3'
+    return 'Bo5'
+  },
+
+  // Bracket pozisyonlarını hesapla
+  generateBracketPositions(participants) {
+    const count = participants.length
+    const positions = []
+    
+    // 2'nin kuvveti olmayan sayılar için bye pozisyonları
+    const nextPowerOf2 = Math.pow(2, Math.ceil(Math.log2(count)))
+    const byes = nextPowerOf2 - count
+    
+    // Pozisyonları oluştur
+    for (let i = 0; i < nextPowerOf2; i++) {
+      if (i < count) {
+        positions.push({
+          position: i + 1,
+          participant: participants[i],
+          isBye: false
+        })
+      } else {
+        positions.push({
+          position: i + 1,
+          participant: null,
+          isBye: true
+        })
+      }
+    }
+    
+    return positions
+  },
+
   // Lobileri al
   async getLobbies(gameId = null) {
     let query = supabase
@@ -332,6 +454,16 @@ export const dbService = {
   async cancelJoinRequest(lobby_id, user_id) {
     const { error } = await supabase
       .from('lobby_join_requests')
+      .delete()
+      .eq('lobby_id', lobby_id)
+      .eq('user_id', user_id);
+    return { error };
+  },
+
+  // Lobi katılımcısını sil
+  async removeLobbyParticipant(lobby_id, user_id) {
+    const { error } = await supabase
+      .from('lobby_participants')
       .delete()
       .eq('lobby_id', lobby_id)
       .eq('user_id', user_id);

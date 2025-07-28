@@ -55,10 +55,23 @@ CREATE TABLE public.lobbies (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone,
   tournament_id bigint,
+  name text,
+  description text,
   CONSTRAINT lobbies_pkey PRIMARY KEY (id),
   CONSTRAINT lobbies_creator_user_id_fkey FOREIGN KEY (creator_user_id) REFERENCES public.profiles(id),
   CONSTRAINT lobbies_game_id_fkey FOREIGN KEY (game_id) REFERENCES public.games(id),
   CONSTRAINT lobbies_tournament_id_fkey FOREIGN KEY (tournament_id) REFERENCES public.tournaments(id)
+);
+CREATE TABLE public.lobby_join_requests (
+  id bigint NOT NULL DEFAULT nextval('lobby_join_requests_id_seq'::regclass),
+  lobby_id bigint NOT NULL,
+  user_id uuid NOT NULL,
+  status text NOT NULL DEFAULT 'pending'::text,
+  requested_at timestamp with time zone NOT NULL DEFAULT now(),
+  responded_at timestamp with time zone,
+  CONSTRAINT lobby_join_requests_pkey PRIMARY KEY (id),
+  CONSTRAINT lobby_join_requests_lobby_id_fkey FOREIGN KEY (lobby_id) REFERENCES public.lobbies(id),
+  CONSTRAINT lobby_join_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id)
 );
 CREATE TABLE public.lobby_participants (
   id bigint NOT NULL DEFAULT nextval('lobby_participants_id_seq'::regclass),
@@ -76,6 +89,11 @@ CREATE TABLE public.match_history (
   game_id bigint NOT NULL,
   completion_time timestamp with time zone NOT NULL DEFAULT now(),
   result_summary text,
+  match_format text DEFAULT 'Bo1'::text CHECK (match_format = ANY (ARRAY['Bo1'::text, 'Bo3'::text, 'Bo5'::text, 'Bo7'::text])),
+  total_sets integer DEFAULT 1,
+  team1_total_score integer DEFAULT 0,
+  team2_total_score integer DEFAULT 0,
+  best_of integer DEFAULT 1,
   CONSTRAINT match_history_pkey PRIMARY KEY (id),
   CONSTRAINT match_history_lobby_id_fkey FOREIGN KEY (lobby_id) REFERENCES public.lobbies(id),
   CONSTRAINT match_history_tournament_id_fkey FOREIGN KEY (tournament_id) REFERENCES public.tournaments(id),
@@ -92,6 +110,23 @@ CREATE TABLE public.match_participants (
   CONSTRAINT match_participants_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.match_history(id),
   CONSTRAINT match_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id),
   CONSTRAINT match_participants_team_id_fkey FOREIGN KEY (team_id) REFERENCES public.teams(id)
+);
+CREATE TABLE public.match_sets (
+  id bigint NOT NULL DEFAULT nextval('match_sets_id_seq'::regclass),
+  match_id bigint NOT NULL,
+  set_number integer NOT NULL CHECK (set_number > 0),
+  team1_score integer NOT NULL DEFAULT 0,
+  team2_score integer NOT NULL DEFAULT 0,
+  winner_team_id bigint,
+  winner_user_id uuid,
+  duration interval,
+  map_name text,
+  set_notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT match_sets_pkey PRIMARY KEY (id),
+  CONSTRAINT match_sets_match_id_fkey FOREIGN KEY (match_id) REFERENCES public.match_history(id),
+  CONSTRAINT match_sets_winner_team_id_fkey FOREIGN KEY (winner_team_id) REFERENCES public.teams(id),
+  CONSTRAINT match_sets_winner_user_id_fkey FOREIGN KEY (winner_user_id) REFERENCES public.profiles(id)
 );
 CREATE TABLE public.media (
   id bigint NOT NULL DEFAULT nextval('media_id_seq'::regclass),
@@ -175,6 +210,8 @@ CREATE TABLE public.tournament_details (
   registration_deadline timestamp with time zone,
   status text NOT NULL DEFAULT 'upcoming'::text CHECK (status = ANY (ARRAY['upcoming'::text, 'registration_open'::text, 'ongoing'::text, 'completed'::text, 'cancelled'::text])),
   banner_image_url text,
+  match_format text DEFAULT 'Bo1'::text CHECK (match_format = ANY (ARRAY['Bo1'::text, 'Bo3'::text, 'Bo5'::text, 'Bo7'::text])),
+  best_of integer DEFAULT 1,
   CONSTRAINT tournament_details_pkey PRIMARY KEY (tournament_id),
   CONSTRAINT tournament_details_tournament_id_fkey FOREIGN KEY (tournament_id) REFERENCES public.tournaments(id)
 );
@@ -247,29 +284,3 @@ CREATE TABLE public.user_game_stats (
   CONSTRAINT user_game_stats_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id),
   CONSTRAINT user_game_stats_game_id_fkey FOREIGN KEY (game_id) REFERENCES public.games(id)
 );
-
--- =================================================================
--- LOBİYE KATILIM İSTEKLERİ TABLOSU
--- =================================================================
-
-CREATE TABLE "lobby_join_requests" (
-    "id" BIGSERIAL PRIMARY KEY,
-    "lobby_id" BIGINT NOT NULL,
-    "user_id" UUID NOT NULL,
-    "status" TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
-    "requested_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    "responded_at" TIMESTAMPTZ,
-    UNIQUE ("lobby_id", "user_id")
-);
-
-ALTER TABLE "lobby_join_requests" ADD FOREIGN KEY ("lobby_id") REFERENCES "lobbies" ("id") ON DELETE CASCADE;
-ALTER TABLE "lobby_join_requests" ADD FOREIGN KEY ("user_id") REFERENCES "profiles" ("id") ON DELETE CASCADE;
-
-CREATE INDEX ON "lobby_join_requests" ("lobby_id");
-CREATE INDEX ON "lobby_join_requests" ("user_id");
-
--- =================================================================
--- LOBİ TABLOSUNA EK ALANLAR (name, description)
--- =================================================================
-ALTER TABLE "lobbies" ADD COLUMN IF NOT EXISTS "name" TEXT;
-ALTER TABLE "lobbies" ADD COLUMN IF NOT EXISTS "description" TEXT;
