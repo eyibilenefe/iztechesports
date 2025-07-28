@@ -1,0 +1,138 @@
+-- =================================================================
+-- SATIR SEVİYESİ GÜVENLİK (ROW-LEVEL SECURITY - RLS) POLİTİKALARI
+-- Bu sorgular, veritabanı tablolarınızın güvenliğini sağlamak için kullanılır.
+-- Her bir politika bloğunu Supabase SQL Editör'ünde çalıştırabilirsiniz.
+-- =================================================================
+
+-- ÖNEMLİ: Bir tabloya politika eklemeden önce RLS'yi o tablo için aktif hale getirmelisiniz.
+
+---
+-- PROFILES Tablosu Politikaları
+---
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Herkes profilleri görebilir."
+ON public.profiles FOR SELECT
+USING (true);
+
+CREATE POLICY "Kullanıcılar kendi profillerini güncelleyebilir."
+ON public.profiles FOR UPDATE
+USING (auth.uid() = id)
+WITH CHECK (auth.uid() = id);
+
+---
+-- TEAMS Tablosu Politikaları
+---
+ALTER TABLE public.teams ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Herkes takımları görebilir."
+ON public.teams FOR SELECT
+USING (true);
+
+CREATE POLICY "Giriş yapmış kullanıcılar takım oluşturabilir."
+ON public.teams FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = creator_user_id);
+
+CREATE POLICY "Takım kurucusu takımı güncelleyebilir."
+ON public.teams FOR UPDATE
+USING (auth.uid() = creator_user_id)
+WITH CHECK (auth.uid() = creator_user_id);
+-- Not: Daha karmaşık "kaptan" rolleri için Supabase Functions kullanmak daha esnek bir çözüm olabilir.
+
+CREATE POLICY "Takım kurucusu takımı silebilir."
+ON public.teams FOR DELETE
+USING (auth.uid() = creator_user_id);
+
+
+---
+-- TEAM_MEMBERS Tablosu Politikaları
+---
+ALTER TABLE public.team_members ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Herkes takım üyelerini görebilir."
+ON public.team_members FOR SELECT
+USING (true);
+
+-- Not: Üye ekleme/çıkarma işlemleri genellikle takım kaptanının yetkisinde olmalıdır.
+-- Bu, Supabase Functions (Edge Functions) kullanılarak daha güvenli bir şekilde yönetilebilir.
+-- Örnek bir basit politika aşağıdadır:
+CREATE POLICY "Takım üyeleri kendi üyeliklerini silebilir."
+ON public.team_members FOR DELETE
+USING (auth.uid() = user_id);
+
+
+---
+-- LOBBIES Tablosu Politikaları
+---
+ALTER TABLE public.lobbies ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Herkes lobileri görebilir."
+ON public.lobbies FOR SELECT
+USING (true);
+
+CREATE POLICY "Giriş yapmış kullanıcılar lobi oluşturabilir."
+ON public.lobbies FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = creator_user_id);
+
+CREATE POLICY "Lobi sahibi lobiyi güncelleyebilir."
+ON public.lobbies FOR UPDATE
+USING (auth.uid() = creator_user_id)
+WITH CHECK (auth.uid() = creator_user_id);
+
+CREATE POLICY "Lobi sahibi lobiyi silebilir."
+ON public.lobbies FOR DELETE
+USING (auth.uid() = creator_user_id);
+
+
+---
+-- LOBBY_PARTICIPANTS Tablosu Politikaları
+---
+ALTER TABLE public.lobby_participants ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Herkes lobi katılımcılarını görebilir."
+ON public.lobby_participants FOR SELECT
+USING (true);
+
+CREATE POLICY "Giriş yapmış kullanıcılar lobilere katılabilir."
+ON public.lobby_participants FOR INSERT
+WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = user_id);
+
+CREATE POLICY "Kullanıcılar kendi katılımlarını silebilir."
+ON public.lobby_participants FOR DELETE
+USING (auth.uid() = user_id);
+
+
+---
+-- NOTIFICATIONS Tablosu Politikaları
+---
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Kullanıcılar sadece kendi bildirimlerini görebilir."
+ON public.notifications FOR SELECT
+USING (auth.uid() = user_id);
+
+CREATE POLICY "Kullanıcılar kendi bildirimlerini güncelleyebilir (okundu olarak işaretleme)."
+ON public.notifications FOR UPDATE
+USING (auth.uid() = user_id);
+
+
+---
+-- GENEL AMAÇLI TABLOLAR İÇİN POLİTİKALAR
+-- (games, tournaments, announcements, match_history vb.)
+---
+
+ALTER TABLE public.games ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Herkes oyunları görebilir." ON public.games FOR SELECT USING (true);
+-- Genellikle oyun ekleme/güncelleme admin yetkisi gerektirir ve RLS yerine arayüzden yönetilir.
+
+ALTER TABLE public.tournaments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Herkes turnuvaları görebilir." ON public.tournaments FOR SELECT USING (true);
+
+ALTER TABLE public.announcements ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Herkes duyuruları görebilir." ON public.announcements FOR SELECT USING (true);
+
+ALTER TABLE public.match_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Herkes maç geçmişini görebilir." ON public.match_history FOR SELECT USING (true);
+
+ALTER TABLE public.match_participants ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Herkes maç katılımcılarını görebilir." ON public.match_participants FOR SELECT USING (true);
