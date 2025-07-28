@@ -135,7 +135,8 @@ export const dbService = {
         *,
         games(name, icon_url),
         profiles!lobbies_creator_user_id_fkey(username, full_name, profile_picture_url),
-        lobby_participants(count)
+        lobby_participants(user_id, profiles(username, full_name, profile_picture_url)),
+        lobby_join_requests(user_id, status)
       `)
       .eq('status', 'open')
       .eq('tournament_id', tournamentId)

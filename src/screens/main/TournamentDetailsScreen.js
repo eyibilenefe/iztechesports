@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Alert } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Alert, Image } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { Colors } from '../../constants/Colors'
 import { dbService } from '../../services/supabase'
@@ -323,7 +323,14 @@ const TournamentDetailsScreen = ({ route }) => {
                 <Text style={{ fontWeight: 'bold', marginTop: 12 }}>Katılımcılar:</Text>
                 {Array.isArray(selectedLobby.lobby_participants) && selectedLobby.lobby_participants.length > 0 ? (
                   selectedLobby.lobby_participants.map((p, idx) => (
-                    <Text key={p.user_id || idx} style={{ color: Colors.text.primary, marginLeft: 8 }}>- {p.user_id}</Text>
+                    <View key={p.user_id || idx} style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8, marginBottom: 2 }}>
+                      {p.profiles?.profile_picture_url && (
+                        <Image source={{ uri: p.profiles.profile_picture_url }} style={{ width: 24, height: 24, borderRadius: 12, marginRight: 6 }} />
+                      )}
+                      <Text style={{ color: Colors.text.primary }}>
+                        {p.profiles?.username || p.user_id}
+                      </Text>
+                    </View>
                   ))
                 ) : (
                   <Text style={{ color: Colors.text.secondary, marginLeft: 8 }}>Henüz katılımcı yok.</Text>
